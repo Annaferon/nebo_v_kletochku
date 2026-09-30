@@ -1,0 +1,44 @@
+name: agents
+
+on:
+  schedule:
+    # Время в UTC. МСК = UTC+3.
+    - cron: '0 2 * * *'      # 05:00 МСК — Writer
+    - cron: '0 6 * * *'      # 09:00 МСК — Publisher
+    - cron: '0 11 * * *'     # 14:00 МСК — Publisher
+    - cron: '0 16 * * *'     # 19:00 МСК — Publisher
+    - cron: '0 18 * * *'     # 21:00 МСК — Stats
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Task (write / publish / stats)'
+        required: true
+        default: 'write'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Run task
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python agent.py ${{ github.event.inputs.task }}
+          elif [ "${{ github.event.schedule }}" = "0 2 * * *" ]; then
+            python agent.py write
+          elif [ "${{ github.event.schedule }}" = "0 18 * * *" ]; then
+            python agent.py stats
+          else
+            python agent.py publish
+          fi
