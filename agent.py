@@ -13,7 +13,7 @@ OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 TG_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TG_ADMIN_ID = int(os.environ["TELEGRAM_ADMIN_ID"])
 TG_CHANNEL_ID = int(os.environ["TELEGRAM_CHANNEL_ID"])
-LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek/deepseek-chat:free")
+LLM_MODEL = os.environ.get("LLM_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 
 
 def get_db_connection():
@@ -25,7 +25,6 @@ def send_tg(chat_id, text):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
     results = []
     chunks = []
-    # Разбиваем текст на куски до 4000 символов, не разрывая абзацы
     while text:
         if len(text) <= 4000:
             chunks.append(text)
