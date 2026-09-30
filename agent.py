@@ -1,6 +1,7 @@
 import os
 import sys
 import random
+import time
 import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -12,7 +13,7 @@ OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 TG_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TG_ADMIN_ID = int(os.environ["TELEGRAM_ADMIN_ID"])
 TG_CHANNEL_ID = int(os.environ["TELEGRAM_CHANNEL_ID"])
-LLM_MODEL = os.environ.get("LLM_MODEL", "meta-llama/llama-3.3-70b-instruct")
+LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek/deepseek-chat:free")
 
 
 def get_db_connection():
@@ -20,14 +21,32 @@ def get_db_connection():
 
 
 def send_tg(chat_id, text):
+    """Отправляет сообщение, разбивая на части до 4000 символов."""
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    r = requests.post(url, json={
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }, timeout=30)
-    return r.json()
+    results = []
+    chunks = []
+    # Разбиваем текст на куски до 4000 символов, не разрывая абзацы
+    while text:
+        if len(text) <= 4000:
+            chunks.append(text)
+            break
+        split_at = text.rfind("\n\n", 0, 4000)
+        if split_at == -1:
+            split_at = 4000
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip()
+
+    for chunk in chunks:
+        r = requests.post(url, json={
+            "chat_id": chat_id,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }, timeout=30)
+        results.append(r.json())
+        print(f"TG response: {r.json()}")
+        time.sleep(0.5)
+    return results
 
 
 def call_llm(prompt):
@@ -40,7 +59,7 @@ def call_llm(prompt):
         json={
             "model": LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.85,
+            "temperature": 0.9,
             "max_tokens": 900,
         },
         timeout=120,
@@ -51,34 +70,25 @@ def call_llm(prompt):
     return data["choices"][0]["message"]["content"].strip()
 
 
-WRITER_PROMPT = """Ты — редактор анонимного Telegram-канала. Канал ведёт человек, который провёл несколько лет в местах лишения свободы. Он рассказывает реальные истории изнутри — про людей, быт, привычки, тишину.
-
-ЗАДАЧА: написать один пост на заданную тему.
-
-ВАЖНО — это истории от первого лица, реальные, простые. Не публицистика, не нравоучения. Просто воспоминание.
-
-СТИЛЬ:
-- От первого лица, мужской, простой разговорный язык.
-- Без пафоса, без морализаторства, без выводов "я понял, что...".
-- Конкретные детали вместо общих слов: как пахло, что говорили, кто сидел рядом, что было на столе.
-- Короткие предложения. Абзацы по 2–3 строки.
-- Длина 800–1200 знаков.
-- Финал — открытый, без точки. Вопрос, образ, тишина.
-
-ЧЕГО НЕ ДЕЛАТЬ:
-- Не романтизировать преступность.
-- Не упоминать реальные имена, клички, города, номера, годы.
-- Не давать советов, не учить жизни.
-- Не использовать штампы: "тюрьма научила", "я исправился", "на зоне не принято".
-- Не использовать блатной сленг ради сленга.
-- Не писать слова "тюрьма", "зона", "камера", "отсидел" — используй намёки, атмосферу, предметы.
-
-ПРИМЕРЫ МОЕГО ГОЛОСА:
-{samples}
+WRITER_PROMPT = """Напиши один пост на русском языке для Telegram-канала.
 
 ТЕМА: {topic}
 
-Напиши один пост. Только текст. Без заголовка.
+ЖЁСТКИЕ ПРАВИЛА:
+- Отвечай ТОЛЬКО текстом поста. Не пиши рассуждений, не переводи задачу, не комментируй свои действия, не пиши "вот пост".
+- Текст строго на русском языке.
+- От первого лица, мужской голос, разговорный, простой.
+- Тема — воспоминания человека, который провёл несколько лет в местах лишения свободы. Пиши атмосферно, через детали: что было, что говорили, как пахло, кто был рядом.
+- Длина 800–1200 знаков.
+- Никаких нравоучений и выводов. Просто воспоминание.
+- Не упоминай реальные имена, города, годы, номера.
+- Не используй слова "тюрьма", "зона", "камера", "отсидел" — только намёки и атмосфера.
+- Без заголовков, без "Пост:", без кавычек вокруг текста.
+
+ПРИМЕРЫ ГОЛОСА АВТОРА (если есть):
+{samples}
+
+Пиши сразу текст поста. Начинай с первой фразы истории.
 """
 
 
@@ -94,7 +104,7 @@ def task_write():
     topics = cur.fetchall()
 
     if not topics:
-        send_tg(TG_ADMIN_ID, "⚠️ Тем в банке не осталось. Добавь новые в таблицу topics.")
+        send_tg(TG_ADMIN_ID, "⚠️ Тем в банке не осталось.")
         cur.close()
         conn.close()
         return
@@ -144,16 +154,13 @@ def task_publish():
         conn.close()
         return
 
-    result = send_tg(TG_CHANNEL_ID, draft["content"])
-    if result.get("ok"):
-        cur.execute(
-            "UPDATE drafts SET status = 'published', published_at = NOW() WHERE id = %s",
-            (draft["id"],)
-        )
-        conn.commit()
-        print(f"Published #{draft['id']}")
-    else:
-        print(f"Failed: {result}")
+    send_tg(TG_CHANNEL_ID, draft["content"])
+    cur.execute(
+        "UPDATE drafts SET status = 'published', published_at = NOW() WHERE id = %s",
+        (draft["id"],)
+    )
+    conn.commit()
+    print(f"Published #{draft['id']}")
 
     cur.close()
     conn.close()
@@ -162,16 +169,12 @@ def task_publish():
 def task_stats():
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-
     cur.execute("SELECT status, COUNT(*) as count FROM drafts GROUP BY status")
     rows = cur.fetchall()
-
     msg = "📊 <b>Статус системы</b>\n\n"
     for r in rows:
         msg += f"{r['status']}: {r['count']}\n"
-
     send_tg(TG_ADMIN_ID, msg)
-
     cur.close()
     conn.close()
 
