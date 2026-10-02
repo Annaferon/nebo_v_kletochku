@@ -2,16 +2,14 @@ name: agents
 
 on:
   schedule:
-    # Время в UTC. МСК = UTC+3.
-    - cron: '0 2 * * *'      # 05:00 МСК — Writer
-    - cron: '0 6 * * *'      # 09:00 МСК — Publisher
-    - cron: '0 11 * * *'     # 14:00 МСК — Publisher
-    - cron: '0 16 * * *'     # 19:00 МСК — Publisher
+    # Время UTC. МСК = UTC+3.
+    - cron: '0 2 * * *'      # 05:00 МСК — Writer (3 варианта)
     - cron: '0 18 * * *'     # 21:00 МСК — Stats
+    - cron: '*/15 * * * *'   # каждые 15 минут — обработка кнопок
   workflow_dispatch:
     inputs:
       task:
-        description: 'Task (write / publish / stats)'
+        description: 'write / publish / stats / callbacks'
         required: true
         default: 'write'
 
@@ -33,12 +31,13 @@ jobs:
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
+          CRON="${{ github.event.schedule }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             python agent.py ${{ github.event.inputs.task }}
-          elif [ "${{ github.event.schedule }}" = "0 2 * * *" ]; then
+          elif [ "$CRON" = "0 2 * * *" ]; then
             python agent.py write
-          elif [ "${{ github.event.schedule }}" = "0 18 * * *" ]; then
+          elif [ "$CRON" = "0 18 * * *" ]; then
             python agent.py stats
-          else
-            python agent.py publish
+          elif [ "$CRON" = "*/15 * * * *" ]; then
+            python agent.py callbacks
           fi
